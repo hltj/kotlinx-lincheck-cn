@@ -1,4 +1,4 @@
-[//]: # (title: Sequential specification)
+[//]: # (title: 时序规范)
 
 To be sure that the algorithm provides correct sequential behavior, you can define its _sequential specification_
 by writing a straightforward sequential implementation of the testing data structure.

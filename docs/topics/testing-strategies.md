@@ -1,4 +1,4 @@
-[//]: # (title: Stress testing and model checking)
+[//]: # (title: 压力测试和模型检测)
 
 Lincheck provides two testing strategies: stress testing and model checking. Learn what happens under the hood of both
 testing strategies using the `Counter` example from the [previous step](introduction.md):

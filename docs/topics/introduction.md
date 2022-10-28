@@ -1,4 +1,4 @@
-[//]: # (title: Write your first test with Lincheck)
+[//]: # (title: 用 Lincheck 编写第一个测试)
 
 This tutorial demonstrates how to write your first Lincheck test, set up the Lincheck framework, and use its basic API. 
 You will create a new IntelliJ IDEA project with an incorrect concurrent counter implementation and write a test for it,

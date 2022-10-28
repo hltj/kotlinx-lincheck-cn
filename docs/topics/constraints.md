@@ -1,4 +1,4 @@
-[//]: # (title: Data structure constraints)
+[//]: # (title: 数据结构约束)
 
 Some data structures may require a part of operations not to be executed concurrently, such as single-producer
 single-consumer queues. Lincheck provides out-of-the-box support for such contracts, generating concurrent scenarios

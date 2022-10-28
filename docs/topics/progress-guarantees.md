@@ -1,4 +1,4 @@
-[//]: # (title: Progress guarantees)
+[//]: # (title: 进度保证)
 
 Many concurrent algorithms provide non-blocking progress guarantees, such as lock-freedom and wait-freedom. As they are
 usually non-trivial, it's easy to add a bug that blocks the algorithm. Lincheck can help you find liveness bugs using

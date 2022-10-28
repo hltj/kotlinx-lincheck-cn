@@ -1,4 +1,4 @@
-[//]: # (title: Lincheck guide)
+[//]: # (title: Lincheck 指南)
 
 Lincheck is a practical and user-friendly framework for testing concurrent algorithms on the JVM. It provides a simple
 and declarative way to write concurrent tests.
