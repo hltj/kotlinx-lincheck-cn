@@ -8,6 +8,30 @@ Consider the [single-consumer queue](https://github.com/JCTools/JCTools/blob/66e
 from the [JCTools library](https://github.com/JCTools/JCTools). Let's write a test to check correctness of its `poll()`,
 `peek()`, and `offer(x)` operations.
 
+In your `build.gradle(.kts)` file, add the JCTools dependency:
+
+   <tabs group="build-script">
+   <tab title="Kotlin" group-key="kotlin">
+
+   ```kotlin
+   dependencies {
+       // jctools dependency
+       testImplementation("org.jctools:jctools-core:%jctoolsVersion%")
+   }
+   ```
+
+   </tab>
+   <tab title="Groovy" group-key="groovy">
+
+   ```groovy
+   dependencies {
+       // jctools dependency
+       testImplementation "org.jctools:jctools-core:%jctoolsVersion%"
+   }
+   ```
+   </tab>
+   </tabs>
+
 To meet the single-consumer restriction, ensure that all `poll()` and `peek()` consuming operations
 are called from a single thread. For that, we can set the `nonParallelGroup` parameter of the 
 corresponding `@Operation` annotations to the same value, e.g. `"consumers"`.
@@ -18,6 +42,7 @@ Here is the resulting test:
 import org.jctools.queues.atomic.*
 import org.jetbrains.kotlinx.lincheck.annotations.*
 import org.jetbrains.kotlinx.lincheck.check
+import org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking.*
 import org.jetbrains.kotlinx.lincheck.strategy.stress.*
 import org.junit.*
 
@@ -45,17 +70,27 @@ Here is an example of the scenario generated for this test:
 
 ```text
 = Iteration 15 / 100 =
-Execution scenario (init part):
-[offer(1), offer(4), peek(), peek(), offer(-6)]
-Execution scenario (parallel part):
-| poll()   | offer(6)  |
-| poll()   | offer(-1) |
-| peek()   | offer(-8) |
-| offer(7) | offer(-5) |
-| peek()   | offer(3)  |
-Execution scenario (post part):
-[poll(), offer(-6), peek(), peek(), peek()]
-
+| --------------------- |
+| Thread 1  | Thread 2  |
+| --------------------- |
+| poll()    |           |
+| poll()    |           |
+| peek()    |           |
+| peek()    |           |
+| peek()    |           |
+| --------------------- |
+| offer(-1) | offer(0)  |
+| offer(0)  | offer(-1) |
+| peek()    | offer(-1) |
+| offer(1)  | offer(1)  |
+| peek()    | offer(1)  |
+| --------------------- |
+| peek()    |           |
+| offer(-2) |           |
+| offer(-2) |           |
+| offer(2)  |           |
+| offer(-2) |           |
+| --------------------- |
 ```
 
 Note that all consuming `poll()` and `peek()` invocations are performed from a single thread, thus satisfying the

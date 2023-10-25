@@ -1,23 +1,11 @@
-/*-
- * #%L
+/*
  * Lincheck
- * %%
- * Copyright (C) 2019 - 2020 JetBrains s.r.o.
- * %%
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- * 
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Lesser Public License for more details.
- * 
- * You should have received a copy of the GNU General Lesser Public
- * License along with this program.  If not, see
- * <http://www.gnu.org/licenses/lgpl-3.0.html>.
- * #L%
+ *
+ * Copyright (C) 2019 - 2023 JetBrains s.r.o.
+ *
+ * This Source Code Form is subject to the terms of the
+ * Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed
+ * with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 package org.jetbrains.kotlinx.lincheck.verifier.quiescent
 
@@ -41,14 +29,14 @@ class QuiescentConsistencyVerifier(sequentialSpecification: Class<*>) : Verifier
 
     override fun verifyResults(scenario: ExecutionScenario, results: ExecutionResult): Boolean {
         val convertedScenario = scenario.converted
-        val convertedResults = results.convert(scenario, convertedScenario.threads)
+        val convertedResults = results.convert(scenario, convertedScenario.nThreads)
         checkScenarioAndResultsAreSimilarlyConverted(convertedScenario, convertedResults)
         return linearizabilityVerifier.verifyResults(convertedScenario, convertedResults)
     }
 
     private val ExecutionScenario.converted: ExecutionScenario get() = scenarioMapping.computeIfAbsent(this) {
         val parallelExecutionConverted = ArrayList<MutableList<Actor>>()
-        repeat(threads) {
+        repeat(nThreads) {
             parallelExecutionConverted.add(ArrayList())
         }
         parallelExecution.forEachIndexed { t, threadActors ->
@@ -65,11 +53,11 @@ class QuiescentConsistencyVerifier(sequentialSpecification: Class<*>) : Verifier
 
     private fun ExecutionResult.convert(originalScenario: ExecutionScenario, newThreads: Int): ExecutionResult {
         val parallelResults = ArrayList<MutableList<ResultWithClock>>()
-        repeat(originalScenario.threads) {
+        repeat(originalScenario.nThreads) {
             parallelResults.add(ArrayList())
         }
-        val clocks = Array(originalScenario.threads) { ArrayList<IntArray>() }
-        val clockMapping = Array(originalScenario.threads) { ArrayList<Int>() }
+        val clocks = Array(originalScenario.nThreads) { ArrayList<IntArray>() }
+        val clockMapping = Array(originalScenario.nThreads) { ArrayList<Int>() }
         clockMapping.forEach { it.add(-1) }
         originalScenario.parallelExecution.forEachIndexed { t, threadActors ->
             threadActors.forEachIndexed { i, a ->
@@ -87,7 +75,7 @@ class QuiescentConsistencyVerifier(sequentialSpecification: Class<*>) : Verifier
         }
         clocks.forEachIndexed { t, threadClocks ->
             threadClocks.forEachIndexed { i, c ->
-                for (j in 0 until originalScenario.threads) {
+                for (j in 0 until originalScenario.nThreads) {
                     val old = parallelResultsWithClock[t][i].clockOnStart[j]
                     c[j] = if (old == -1) -1 else clockMapping[j][old]
                 }
@@ -106,7 +94,7 @@ class QuiescentConsistencyVerifier(sequentialSpecification: Class<*>) : Verifier
         check(scenario.parallelExecution.size == results.parallelResultsWithClock.size) {
             "Transformed scenario and results have different number of parallel threads"
         }
-        for (t in 0 until scenario.threads) {
+        for (t in 0 until scenario.nThreads) {
             check(scenario.parallelExecution[t].size == results.parallelResultsWithClock[t].size) {
                 "Transformed scenario and resutls have different number of operations in thread $t"
             }

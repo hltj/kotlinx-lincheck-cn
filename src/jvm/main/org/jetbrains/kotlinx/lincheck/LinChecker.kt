@@ -1,23 +1,11 @@
 /*
- * #%L
  * Lincheck
- * %%
- * Copyright (C) 2019 JetBrains s.r.o.
- * %%
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Lesser Public License for more details.
+ * Copyright (C) 2019 - 2023 JetBrains s.r.o.
  *
- * You should have received a copy of the GNU General Lesser Public
- * License along with this program.  If not, see
- * <http://www.gnu.org/licenses/lgpl-3.0.html>.
- * #L%
+ * This Source Code Form is subject to the terms of the
+ * Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed
+ * with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 package org.jetbrains.kotlinx.lincheck
 
@@ -90,6 +78,8 @@ class LinChecker (private val testClass: Class<*>, options: Options<*, *>?) {
                 reporter.logFailedIteration(minimizedFailedIteration)
                 return minimizedFailedIteration
             }
+            // Reset the parameter generator ranges to start with the same initial bounds on each scenario generation.
+            testStructure.parameterGenerators.forEach { it.reset() }
         }
         return null
     }
@@ -111,35 +101,14 @@ class LinChecker (private val testClass: Class<*>, options: Options<*, *>?) {
 
     private fun ExecutionScenario.tryMinimize(testCfg: CTestConfiguration): LincheckFailure? {
         // Reversed indices to avoid conflicts with in-loop removals
-        for (i in parallelExecution.indices.reversed()) {
-            for (j in parallelExecution[i].indices.reversed()) {
-                val failure = tryMinimize(i + 1, j, testCfg)
-                if (failure != null) return failure
+        for (i in threads.indices.reversed()) {
+            for (j in threads[i].indices.reversed()) {
+                tryMinimize(i, j)
+                    ?.run(testCfg, testCfg.createVerifier())
+                    ?.let { return it }
             }
         }
-        for (j in initExecution.indices.reversed()) {
-            val failure = tryMinimize(0, j, testCfg)
-            if (failure != null) return failure
-        }
-        for (j in postExecution.indices.reversed()) {
-            val failure = tryMinimize(threads + 1, j, testCfg)
-            if (failure != null) return failure
-        }
         return null
-    }
-
-    private fun ExecutionScenario.tryMinimize(threadId: Int, position: Int, testCfg: CTestConfiguration): LincheckFailure? {
-        val newScenario = this.copy()
-        val actors = newScenario[threadId] as MutableList<Actor>
-        actors.removeAt(position)
-        if (actors.isEmpty() && threadId != 0 && threadId != newScenario.threads + 1) {
-            // Also remove the empty thread
-            newScenario.parallelExecution.removeAt(threadId - 1)
-        }
-        return if (newScenario.isValid) {
-            val verifier = testCfg.createVerifier()
-            newScenario.run(testCfg, verifier)
-        } else null
     }
 
     private fun ExecutionScenario.run(testCfg: CTestConfiguration, verifier: Verifier): LincheckFailure? =
@@ -150,38 +119,6 @@ class LinChecker (private val testClass: Class<*>, options: Options<*, *>?) {
             stateRepresentationMethod = testStructure.stateRepresentation,
             verifier = verifier
         ).run()
-
-    private fun ExecutionScenario.copy() = ExecutionScenario(
-        ArrayList(initExecution),
-        parallelExecution.map { ArrayList(it) },
-        ArrayList(postExecution)
-    )
-
-    private val ExecutionScenario.isValid: Boolean
-        get() = !isParallelPartEmpty &&
-                (!hasSuspendableActors() || (!hasSuspendableActorsInInitPart && !hasPostPartAndSuspendableActors))
-
-    private fun ExecutionScenario.validate() {
-        require(!isParallelPartEmpty) {
-            "The generated scenario has empty parallel part"
-        }
-        if (hasSuspendableActors()) {
-            require(!hasSuspendableActorsInInitPart) {
-                "The generated scenario for the test class with suspendable methods contains suspendable actors in initial part"
-            }
-            require(!hasPostPartAndSuspendableActors) {
-                "The generated scenario  for the test class with suspendable methods has non-empty post part"
-            }
-        }
-    }
-
-    private val ExecutionScenario.hasSuspendableActorsInInitPart get() =
-        initExecution.stream().anyMatch(Actor::isSuspendable)
-    private val ExecutionScenario.hasPostPartAndSuspendableActors get() =
-        (parallelExecution.stream().anyMatch { actors -> actors.stream().anyMatch { it.isSuspendable } } && postExecution.size > 0)
-    private val ExecutionScenario.isParallelPartEmpty get() =
-        parallelExecution.map { it.size }.sum() == 0
-
 
     private fun CTestConfiguration.createVerifier() =
         verifierClass.getConstructor(Class::class.java).newInstance(sequentialSpecification)

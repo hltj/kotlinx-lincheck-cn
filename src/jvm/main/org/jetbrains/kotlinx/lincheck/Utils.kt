@@ -1,43 +1,28 @@
-/*-
- * #%L
+/*
  * Lincheck
- * %%
- * Copyright (C) 2019 JetBrains s.r.o.
- * %%
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- * 
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Lesser Public License for more details.
- * 
- * You should have received a copy of the GNU General Lesser Public
- * License along with this program.  If not, see
- * <http://www.gnu.org/licenses/lgpl-3.0.html>.
- * #L%
+ *
+ * Copyright (C) 2019 - 2023 JetBrains s.r.o.
+ *
+ * This Source Code Form is subject to the terms of the
+ * Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed
+ * with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 package org.jetbrains.kotlinx.lincheck
 
 import kotlinx.coroutines.*
-import org.jetbrains.kotlinx.lincheck.CancellableContinuationHolder.storedLastCancellableCont
 import org.jetbrains.kotlinx.lincheck.execution.*
 import org.jetbrains.kotlinx.lincheck.runner.*
 import org.jetbrains.kotlinx.lincheck.strategy.managed.*
-import org.jetbrains.kotlinx.lincheck.strategy.managed.ManagedStrategyTransformer
 import org.jetbrains.kotlinx.lincheck.verifier.*
 import org.objectweb.asm.*
 import org.objectweb.asm.commons.*
 import java.io.*
 import java.lang.ref.*
+import java.lang.reflect.*
 import java.lang.reflect.Method
 import java.util.*
 import kotlin.coroutines.*
 import kotlin.coroutines.intrinsics.*
-import kotlin.reflect.full.*
-import kotlin.reflect.jvm.*
 
 
 fun chooseSequentialSpecification(sequentialSpecificationByUser: Class<*>?, testClass: Class<*>): Class<*> =
@@ -61,12 +46,14 @@ internal fun executeActor(
         val res = m.invoke(instance, *args.toTypedArray())
         return if (m.returnType.isAssignableFrom(Void.TYPE)) VoidResult else createLincheckResult(res)
     } catch (invE: Throwable) {
-        val eClass = (invE.cause ?: invE).javaClass.normalize()
-        for (ec in actor.handledExceptions) {
-            if (ec.isAssignableFrom(eClass))
-                return ExceptionResult.create(eClass)
-        }
-        throw IllegalStateException("Invalid exception as a result of $actor", invE)
+        // If the exception is thrown not during the method invocation - fail immediately
+        if (invE !is InvocationTargetException)
+            throw invE
+        // Exception thrown not during the method invocation should contain underlying exception
+        return ExceptionResult.create(
+            invE.cause?.takeIf { exceptionCanBeValidExecutionResult(it) }
+                ?: throw invE
+        )
     } catch (e: Exception) {
         e.catch(
             NoSuchMethodException::class.java,
@@ -92,12 +79,30 @@ private fun executeValidationFunction(instance: Any, validationFunction: Method)
     val m = getMethod(instance, validationFunction)
     try {
         m.invoke(instance)
-    } catch (e: Throwable) {
-        return e.cause
+    } catch (e: Exception) { // We don't catch any Errors - the only correct way is to re-throw them
+        // There are some exception types that can be thrown from this method:
+        return when (e) {
+            // It's our fault if we supplied null instead of method or instance
+            is NullPointerException -> LincheckInternalBugException(e)
+            // It's our fault as it can appear if this validation function has parameters, but we had to check it before
+            is IllegalArgumentException -> LincheckInternalBugException(e)
+            // Something wrong with access to some classes, just report it
+            is IllegalAccessException -> e
+            // Regular validation function exception
+            is InvocationTargetException -> {
+                val validationException = e.targetException
+                val wrapperExceptionStackTraceLength = e.stackTrace.size
+                // drop stacktrace related to Lincheck call, keeping only stacktrace starting from validation function call
+                validationException.stackTrace = validationException.stackTrace.dropLast(wrapperExceptionStackTraceLength).toTypedArray()
+                validationException
+            }
+            else -> LincheckInternalBugException(e)
+        }
     }
     return null
 }
 
+@Suppress("UNCHECKED_CAST")
 internal fun <T> Class<T>.normalize() = LinChecker::class.java.classLoader.loadClass(name) as Class<T>
 
 private val methodsCache = WeakHashMap<Class<*>, WeakHashMap<Method, WeakReference<Method>>>()
@@ -139,7 +144,7 @@ private fun Class<out Any>.getMethod(name: String, parameterTypes: Array<Class<o
  */
 internal fun createLincheckResult(res: Any?, wasSuspended: Boolean = false) = when {
     (res != null && res.javaClass.isAssignableFrom(Void.TYPE)) || res is Unit -> if (wasSuspended) SuspendedVoidResult else VoidResult
-    res != null && res is Throwable -> ExceptionResult.create(res.javaClass, wasSuspended)
+    res != null && res is Throwable -> ExceptionResult.create(res, wasSuspended)
     res === COROUTINE_SUSPENDED -> Suspended
     res is kotlin.Result<Any?> -> res.toLinCheckResult(wasSuspended)
     else -> ValueResult(res.convertForLoader(LinChecker::class.java.classLoader), wasSuspended)
@@ -153,7 +158,7 @@ private fun kotlin.Result<Any?>.toLinCheckResult(wasSuspended: Boolean) =
             is Throwable -> ValueResult(value::class.java, wasSuspended)
             else -> ValueResult(value.convertForLoader(LinChecker::class.java.classLoader), wasSuspended)
         }
-    } else ExceptionResult.create(exceptionOrNull()!!.let { it::class.java }, wasSuspended)
+    } else ExceptionResult.create(exceptionOrNull()!!, wasSuspended)
 
 inline fun <R> Throwable.catch(vararg exceptions: Class<*>, block: () -> R): R {
     if (exceptions.any { this::class.java.isAssignableFrom(it) }) {
@@ -161,27 +166,10 @@ inline fun <R> Throwable.catch(vararg exceptions: Class<*>, block: () -> R): R {
     } else throw this
 }
 
-/**
- * Returns scenario for the specified thread. Note that initial and post parts
- * are represented as threads with ids `0` and `threads + 1` respectively.
- */
-internal operator fun ExecutionScenario.get(threadId: Int): List<Actor> = when (threadId) {
-    0 -> initExecution
-    threads + 1 -> postExecution
-    else -> parallelExecution[threadId - 1]
-}
-
-/**
- * Returns results for the specified thread. Note that initial and post parts
- * are represented as threads with ids `0` and `threads + 1` respectively.
- */
-internal operator fun ExecutionResult.get(threadId: Int): List<Result> = when (threadId) {
-    0 -> initResults
-    parallelResultsWithClock.size + 1 -> postResults
-    else -> parallelResultsWithClock[threadId - 1].map { it.result }
-}
-
-internal class StoreExceptionHandler : AbstractCoroutineContextElement(CoroutineExceptionHandler), CoroutineExceptionHandler {
+internal class StoreExceptionHandler :
+    AbstractCoroutineContextElement(CoroutineExceptionHandler),
+    CoroutineExceptionHandler
+{
     var exception: Throwable? = null
 
     override fun handleException(context: CoroutineContext, exception: Throwable) {
@@ -209,9 +197,6 @@ internal fun <T> CancellableContinuation<T>.cancelByLincheck(promptCancellation:
 
 internal enum class CancellationResult { CANCELLED_BEFORE_RESUMPTION, CANCELLED_AFTER_RESUMPTION, CANCELLATION_FAILED }
 
-@Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
-private val cancelCompletedResultMethod = DispatchedTask::class.declaredFunctions.find { it.name ==  "cancelCompletedResult" }!!.javaMethod!!
-
 /**
  * Returns `true` if the continuation was cancelled by [CancellableContinuation.cancel].
  */
@@ -228,7 +213,7 @@ fun storeCancellableContinuation(cont: CancellableContinuation<*>) {
     if (t is FixedActiveThreadsExecutor.TestThread) {
         t.cont = cont
     } else {
-        storedLastCancellableCont = cont
+        CancellableContinuationHolder.storedLastCancellableCont = cont
     }
 }
 
@@ -241,7 +226,6 @@ internal fun ExecutionScenario.convertForLoader(loader: ClassLoader) = Execution
             Actor(
                 method = a.method.convertForLoader(loader),
                 arguments = args,
-                handledExceptions = a.handledExceptions,
                 cancelOnSuspension = a.cancelOnSuspension,
                 allowExtraSuspension = a.allowExtraSuspension,
                 blocking = a.blocking,
@@ -274,7 +258,8 @@ private fun Method.convertForLoader(loader: ClassLoader): Method {
     return clazz.getDeclaredMethod(name, *parameterTypes.toTypedArray())
 }
 
-private fun Class<*>.convertForLoader(loader: TransformationClassLoader): Class<*> = if (isPrimitive) this else loader.loadClass(loader.remapClassName(name))
+private fun Class<*>.convertForLoader(loader: TransformationClassLoader): Class<*> =
+    if (isPrimitive) this else loader.loadClass(loader.remapClassName(name))
 
 private fun ResultWithClock.convertForLoader(loader: ClassLoader): ResultWithClock =
         ResultWithClock(result.convertForLoader(loader), clockOnStart)
@@ -290,7 +275,7 @@ private fun Result.convertForLoader(loader: ClassLoader): Result = when (this) {
  * Non-primitive values need to be [Serializable] for this to succeed.
  */
 internal fun Any?.convertForLoader(loader: ClassLoader) = when {
-    this == null -> this
+    this == null -> null
     this::class.java.classLoader == null -> this // primitive class, no need to convert
     this::class.java.classLoader == loader -> this // already in this loader
     loader is TransformationClassLoader && !loader.shouldBeTransformed(this.javaClass) -> this
@@ -342,14 +327,53 @@ internal fun getRemapperByTransformers(classTransformers: List<ClassVisitor>): R
 internal val String.canonicalClassName get() = this.replace('/', '.')
 internal val String.internalClassName get() = this.replace('.', '/')
 
-fun wrapInvalidAccessFromUnnamedModuleExceptionWithDescription(e: Throwable): Throwable {
-    if (e.message?.contains("to unnamed module") ?: false) {
-        return RuntimeException(ADD_OPENS_MESSAGE, e)
-    }
-    return e
+internal fun exceptionCanBeValidExecutionResult(exception: Throwable): Boolean {
+    return exception !is ThreadDeath && // used to stop thread in FixedActiveThreadsExecutor by calling thread.stop method
+            exception !is InternalLincheckTestUnexpectedException &&
+            exception !is ForcibleExecutionFinishException &&
+            !isIllegalAccessOfUnsafeDueToJavaVersion(exception)
 }
 
-private val ADD_OPENS_MESSAGE = "It seems that you use Java 9+ and the code uses Unsafe or similar constructions that are not accessible from unnamed modules.\n" +
-    "Please add the following lines to your test running configuration:\n" +
-    "--add-opens java.base/jdk.internal.misc=ALL-UNNAMED\n" +
-    "--add-exports java.base/jdk.internal.util=ALL-UNNAMED"
+internal fun wrapInvalidAccessFromUnnamedModuleExceptionWithDescription(throwable: Throwable): Throwable {
+    if (isIllegalAccessOfUnsafeDueToJavaVersion(throwable)) return RuntimeException(ADD_OPENS_MESSAGE, throwable)
+
+    return throwable
+}
+
+internal fun isIllegalAccessOfUnsafeDueToJavaVersion(exception: Throwable): Boolean {
+    return exception is IllegalAccessException && exception.message?.contains("to unnamed module") ?: false
+}
+
+
+internal const val ADD_OPENS_MESSAGE =
+    "It seems that you use Java 9+ and the code uses Unsafe or similar constructions that are not accessible from unnamed modules.\n" +
+            "Please add the following lines to your test running configuration:\n" +
+            "--add-opens java.base/jdk.internal.misc=ALL-UNNAMED\n" +
+            "--add-exports java.base/jdk.internal.util=ALL-UNNAMED\n" +
+            "--add-exports java.base/sun.security.action=ALL-UNNAMED"
+
+/**
+ * Utility exception for test purposes.
+ * When this exception is thrown by an operation, it will halt testing with [UnexpectedExceptionInvocationResult].
+ */
+@Suppress("JavaIoSerializableObjectMustHaveReadResolve")
+internal object InternalLincheckTestUnexpectedException : Exception()
+
+/**
+ * Thrown in case when `cause` exception is unexpected by Lincheck internal logic.
+ */
+internal class LincheckInternalBugException(cause: Throwable): Exception(cause)
+
+internal fun stackTraceRepresentation(stackTrace: Array<StackTraceElement>): List<String> {
+    return transformStackTraceBackFromRemapped(stackTrace).map { it.toString() }.filter { line ->
+        "org.jetbrains.kotlinx.lincheck.strategy" !in line
+                && "org.jetbrains.kotlinx.lincheck.runner" !in line
+                && "org.jetbrains.kotlinx.lincheck.UtilsKt" !in line
+    }
+}
+
+internal fun transformStackTraceBackFromRemapped(stackTrace: Array<StackTraceElement>) = stackTrace.map {
+    StackTraceElement(it.className.removePrefix(TransformationClassLoader.REMAPPED_PACKAGE_CANONICAL_NAME), it.methodName, it.fileName, it.lineNumber)
+}
+
+internal const val LINCHECK_PACKAGE_NAME = "org.jetbrains.kotlinx.lincheck."

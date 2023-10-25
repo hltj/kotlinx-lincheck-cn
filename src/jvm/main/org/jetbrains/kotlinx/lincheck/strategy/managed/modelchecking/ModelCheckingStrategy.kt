@@ -1,27 +1,16 @@
-/*-
- * #%L
+/*
  * Lincheck
- * %%
- * Copyright (C) 2019 - 2020 JetBrains s.r.o.
- * %%
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Lesser Public License for more details.
+ * Copyright (C) 2019 - 2023 JetBrains s.r.o.
  *
- * You should have received a copy of the GNU General Lesser Public
- * License along with this program.  If not, see
- * <http://www.gnu.org/licenses/lgpl-3.0.html>.
- * #L%
+ * This Source Code Form is subject to the terms of the
+ * Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed
+ * with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 package org.jetbrains.kotlinx.lincheck.strategy.managed.modelchecking
 
 import org.jetbrains.kotlinx.lincheck.execution.*
+import org.jetbrains.kotlinx.lincheck.runner.*
 import org.jetbrains.kotlinx.lincheck.strategy.*
 import org.jetbrains.kotlinx.lincheck.strategy.managed.*
 import org.jetbrains.kotlinx.lincheck.verifier.*
@@ -66,12 +55,18 @@ internal class ModelCheckingStrategy(
     private lateinit var currentInterleaving: Interleaving
 
     override fun runImpl(): LincheckFailure? {
+        currentInterleaving = root.nextInterleaving() ?: return null
         while (usedInvocations < maxInvocations) {
+            // run invocation and check its results
+            val invocationResult = runInvocation()
+            if (suddenInvocationResult is SpinCycleFoundAndReplayRequired) {
+                currentInterleaving.rollbackAfterSpinCycleFound()
+                continue
+            }
+            usedInvocations++
+            checkResult(invocationResult)?.let { return it }
             // get new unexplored interleaving
             currentInterleaving = root.nextInterleaving() ?: break
-            usedInvocations++
-            // run invocation and check its results
-            checkResult(runInvocation())?.let { return it }
         }
         return null
     }
@@ -99,7 +94,24 @@ internal class ModelCheckingStrategy(
         super.initializeInvocation()
     }
 
-    override fun chooseThread(iThread: Int): Int = currentInterleaving.chooseThread(iThread)
+    override fun beforePart(part: ExecutionPart) {
+        val nextThread = when (part) {
+            ExecutionPart.INIT -> 0
+            ExecutionPart.PARALLEL -> currentInterleaving.chooseThread(0)
+            ExecutionPart.POST -> 0
+        }
+        executionPart = part
+        loopDetector.beforePart(nextThread)
+        currentThread = nextThread
+    }
+
+    override fun chooseThread(iThread: Int): Int =
+        currentInterleaving.chooseThread(iThread).also {
+           check(it in switchableThreads(iThread)) { """
+               Trying to switch the execution to thread $it,
+               but only the following threads are eligible to switch: ${switchableThreads(iThread)}
+           """.trimIndent() }
+        }
 
     /**
      * An abstract node with an execution choice in the interleaving tree.
@@ -228,7 +240,7 @@ internal class ModelCheckingStrategy(
             executionPosition = -1 // the first execution position will be zero
             interleavingFinishingRandom = Random(2) // random with a constant seed
             nextThreadToSwitch = threadSwitchChoices.iterator()
-            currentThread = nextThreadToSwitch.next() // choose initial executing thread
+            loopDetector.initialize()
             lastNotInitializedNodeChoices = null
             lastNotInitializedNode?.let {
                 // Create a mutable list for the initialization of the not initialized node choices.
@@ -239,18 +251,21 @@ internal class ModelCheckingStrategy(
             }
         }
 
+        fun rollbackAfterSpinCycleFound() {
+            lastNotInitializedNodeChoices?.clear()
+        }
+
         fun chooseThread(iThread: Int): Int =
             if (nextThreadToSwitch.hasNext()) {
                 // Use the predefined choice.
-                val result = nextThreadToSwitch.next()
-                check(result in switchableThreads(iThread))
-                result
+                nextThreadToSwitch.next()
             } else {
                 // There is no predefined choice.
                 // This can happen if there were forced thread switches after the last predefined one
                 // (e.g., thread end, coroutine suspension, acquiring an already acquired lock or monitor.wait).
                 // We use a deterministic random here to choose the next thread.
-                lastNotInitializedNodeChoices = null // end of execution position choosing initialization because of new switch
+                lastNotInitializedNodeChoices =
+                    null // end of execution position choosing initialization because of new switch
                 switchableThreads(iThread).random(interleavingFinishingRandom)
             }
 

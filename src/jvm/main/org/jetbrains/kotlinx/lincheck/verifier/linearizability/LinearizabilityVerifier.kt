@@ -1,23 +1,11 @@
-/*-
- * #%L
+/*
  * Lincheck
- * %%
- * Copyright (C) 2015 - 2018 Devexperts, LLC
- * %%
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- * 
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Lesser Public License for more details.
- * 
- * You should have received a copy of the GNU General Lesser Public
- * License along with this program.  If not, see
- * <http://www.gnu.org/licenses/lgpl-3.0.html>.
- * #L%
+ *
+ * Copyright (C) 2019 - 2023 JetBrains s.r.o.
+ *
+ * This Source Code Form is subject to the terms of the
+ * Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed
+ * with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 package org.jetbrains.kotlinx.lincheck.verifier.linearizability
 
@@ -52,15 +40,11 @@ class LinearizabilityContext : VerifierContext {
         // in accordance with the rule that all actors from init part should be
         // executed at first, after that all actors from parallel part, and
         // all actors from post part should be executed at last.
-        val legal = when (threadId) {
-            0 -> true // INIT: we already checked that there is an unprocessed actorWithToken
-            in 1..scenario.threads -> isCompleted(0) && hblegal(threadId) // PARALLEL
-            else -> initCompleted && parallelCompleted // POST
-        }
-        if (!legal) return null
+        if (!hblegal(threadId))
+            return null
         val actorId = executed[threadId]
-        val actor = scenario[threadId][actorId]
-        val expectedResult = results[threadId][actorId]
+        val actor = scenario.threads[threadId][actorId]
+        val expectedResult = results.threadsResults[threadId][actorId]
         // Check whether the operation has been suspended and should be followed by cancellation
         val ticket = tickets[threadId]
         val promptCancel = actor.promptCancellation && ticket != NO_TICKET && expectedResult === Cancelled
@@ -77,9 +61,9 @@ class LinearizabilityContext : VerifierContext {
     // checks whether the transition does not violate the happens-before relation constructed on the clocks
     private fun hblegal(threadId: Int): Boolean {
         val actorId = executed[threadId]
-        val clocks = results.parallelResultsWithClock[threadId - 1][actorId].clockOnStart
-        for (i in 1..scenario.threads) {
-            if (executed[i] < clocks[i - 1]) return false
+        val clocks = results.threadsResultsWithClock[threadId][actorId].clockOnStart
+        for (i in 0 until scenario.nThreads) {
+            if (executed[i] < clocks[i]) return false
         }
         return true
     }

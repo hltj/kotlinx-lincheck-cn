@@ -1,29 +1,17 @@
+/*
+ * Lincheck
+ *
+ * Copyright (C) 2019 - 2023 JetBrains s.r.o.
+ *
+ * This Source Code Form is subject to the terms of the
+ * Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed
+ * with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
 package org.jetbrains.kotlinx.lincheck
 
-import java.io.Serializable
 import kotlin.coroutines.*
 
-/*
- * #%L
- * Lincheck
- * %%
- * Copyright (C) 2015 - 2018 Devexperts, LLC
- * %%
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Lesser Public License for more details.
- *
- * You should have received a copy of the GNU General Lesser Public
- * License along with this program.  If not, see
- * <http://www.gnu.org/licenses/lgpl-3.0.html>.
- * #L%
- */
 
 /**
  * The instance of this class represents a result of actor invocation.
@@ -69,21 +57,48 @@ object Cancelled : Result() {
 }
 
 /**
- * Type of result used if the actor invocation fails with the specified in {@link Operation#handleExceptionsAsResult()} exception [tClazz].
+ * Type of result used if the actor invocation fails with the specified in {@link Operation#handleExceptionsAsResult()} exception [tClazzFullName].
  */
-@Suppress("DataClassPrivateConstructor")
-data class ExceptionResult private constructor(val tClazz: Class<out Throwable>, override val wasSuspended: Boolean) : Result() {
-    override fun toString() = wasSuspendedPrefix + tClazz.simpleName
+class ExceptionResult private constructor(
+    /**
+     * Exception is stored to print it's stackTrace in case of incorrect results
+     */
+    val throwable: Throwable,
+    override val wasSuspended: Boolean,
+    /**
+     * Normalized version of the exception class
+     */
+    tClazz: Class<out Throwable>,
+) : Result() {
+
+    val tClassCanonicalName: String = tClazz.canonicalName
+    override fun toString() = wasSuspendedPrefix + throwable::class.java.simpleName
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ExceptionResult) return false
+
+        if (tClassCanonicalName != other.tClassCanonicalName) return false
+        return wasSuspended == other.wasSuspended
+    }
+
+    override fun hashCode(): Int {
+        var result = tClassCanonicalName.hashCode()
+        result = 31 * result + wasSuspended.hashCode()
+        return result
+    }
+
 
     companion object {
         @Suppress("UNCHECKED_CAST")
         @JvmOverloads
-        fun create(tClazz: Class<out Throwable>, wasSuspended: Boolean = false) = ExceptionResult(tClazz.normalize(), wasSuspended)
+        fun create(throwable: Throwable, wasSuspended: Boolean = false) =
+            ExceptionResult(throwable, wasSuspended, throwable::class.java.normalize())
     }
 }
+
 // for byte-code generation
 @JvmSynthetic
-fun createExceptionResult(tClazz: Class<out Throwable>) = ExceptionResult.create(tClazz, false)
+fun createExceptionResult(throwable: Throwable) = ExceptionResult.create(throwable, false)
 
 /**
  * Type of result used if the actor invocation suspended the thread and did not get the final result yet

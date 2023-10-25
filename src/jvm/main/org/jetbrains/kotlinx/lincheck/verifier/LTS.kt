@@ -1,30 +1,17 @@
-/*-
- * #%L
+/*
  * Lincheck
- * %%
- * Copyright (C) 2019 JetBrains s.r.o.
- * %%
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Lesser Public License for more details.
+ * Copyright (C) 2019 - 2023 JetBrains s.r.o.
  *
- * You should have received a copy of the GNU General Lesser Public
- * License along with this program.  If not, see
- * <http://www.gnu.org/licenses/lgpl-3.0.html>.
- * #L%
+ * This Source Code Form is subject to the terms of the
+ * Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed
+ * with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 package org.jetbrains.kotlinx.lincheck.verifier
 
 import kotlinx.coroutines.*
 import org.jetbrains.kotlinx.lincheck.*
-import org.jetbrains.kotlinx.lincheck.CancellableContinuationHolder.storedLastCancellableCont
 import org.jetbrains.kotlinx.lincheck.verifier.LTS.*
 import org.jetbrains.kotlinx.lincheck.verifier.OperationType.*
 import java.util.*
@@ -145,7 +132,7 @@ class LTS(sequentialSpecification: Class<*>) {
             this == transitionInfo.result ||
             this is ValueResult && transitionInfo.result is ValueResult && this.value == transitionInfo.result.value &&
                 (!wasSuspended && transitionInfo.result.wasSuspended || wasSuspended && allowExtraSuspension) ||
-            this is ExceptionResult && transitionInfo.result is ExceptionResult && this.tClazz == transitionInfo.result.tClazz &&
+            this is ExceptionResult && transitionInfo.result is ExceptionResult && this.tClassCanonicalName == transitionInfo.result.tClassCanonicalName &&
                 (!wasSuspended && transitionInfo.result.wasSuspended || wasSuspended && allowExtraSuspension) ||
             this == VoidResult && transitionInfo.result == SuspendedVoidResult ||
             this == SuspendedVoidResult && transitionInfo.result == VoidResult && allowExtraSuspension
@@ -208,7 +195,7 @@ class LTS(sequentialSpecification: Class<*>) {
         continuationsMap: MutableMap<Operation, CancellableContinuation<*>>
     ): Result {
         val prevResumedTickets = resumedOperations.keys.toMutableList()
-        storedLastCancellableCont = null
+        CancellableContinuationHolder.storedLastCancellableCont = null
         val res = when (type) {
             REQUEST -> executeActor(externalState, actor, Completion(ticket, actor, resumedOperations))
             FOLLOW_UP -> {
@@ -235,8 +222,8 @@ class LTS(sequentialSpecification: Class<*>) {
             }
         }
         if (res === Suspended) {
-            val cont = storedLastCancellableCont
-            storedLastCancellableCont = null
+            val cont = CancellableContinuationHolder.storedLastCancellableCont
+            CancellableContinuationHolder.storedLastCancellableCont = null
             if (cont !== null) continuationsMap[this] = cont
             // Operation suspended it's execution.
             suspendedOperations.add(this)

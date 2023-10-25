@@ -1,36 +1,27 @@
 /*
- * #%L
  * Lincheck
- * %%
- * Copyright (C) 2015 - 2018 Devexperts, LLC
- * %%
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Lesser Public License for more details.
+ * Copyright (C) 2019 - 2023 JetBrains s.r.o.
  *
- * You should have received a copy of the GNU General Lesser Public
- * License along with this program.  If not, see
- * <http://www.gnu.org/licenses/lgpl-3.0.html>.
- * #L%
+ * This Source Code Form is subject to the terms of the
+ * Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed
+ * with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 package org.jetbrains.kotlinx.lincheck.runner;
 
 import org.jetbrains.kotlinx.lincheck.Result;
 
+import static org.jetbrains.kotlinx.lincheck.UtilsKt.*;
+
 
 /**
- * Instance of this class represents the test execution for ONE thread. Several instances should be ran in parallel.
+ * Instance of this class represents the test execution for ONE thread. Several instances should be run in parallel.
  * All implementations of this class should be generated via {@link TestThreadExecutionGenerator}.
  * The results and clocks are in the `results`  and `clocks` fields correspondingly.
  *
  * <p> This class should be public for having access from generated ones.
  */
+@SuppressWarnings("unused")
 public abstract class TestThreadExecution implements Runnable {
     // The following fields are assigned in TestThreadExecutionGenerator
     protected Runner runner;
@@ -39,9 +30,17 @@ public abstract class TestThreadExecution implements Runnable {
     public TestThreadExecution[] allThreadExecutions;
 
     public Result[] results; // for ExecutionResult
+
+    public int iThread; // thread ID of this execution
     public int[][] clocks; // for HBClock
     public volatile int curClock;
     public boolean useClocks;
+
+    public TestThreadExecution() {}
+
+    public TestThreadExecution(int iThread) {
+        this.iThread = iThread;
+    }
 
     public void readClocks(int currentActor) {
         for (int i = 0; i < allThreadExecutions.length; i++) {
@@ -49,7 +48,17 @@ public abstract class TestThreadExecution implements Runnable {
         }
     }
 
+    // used in byte-code generation
     public void incClock() {
         curClock++;
     }
+
+    // used in byte-code generation
+    public void failOnExceptionIsUnexpected(int iThread, Throwable e) throws Throwable {
+        if (!exceptionCanBeValidExecutionResult(e)) {
+            runner.onFailure(iThread, e);
+            throw e;
+        }
+    }
+
 }
